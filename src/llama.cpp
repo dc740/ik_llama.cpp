@@ -12782,6 +12782,7 @@ struct llama_data_read {
                     return false;
                 }
             }
+        }
         // NUMA mirror: restore wrote node 0's KV copies directly (ggml_backend_tensor_set / split
         // memcpy), bypassing graph-CPY replication — re-sync the other node copies so attention on
         // node>0 reads the restored K/V, not stale/zero data. No-op when not mirroring.
