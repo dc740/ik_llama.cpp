@@ -3048,6 +3048,7 @@ struct ggml_compute_state_shared {
     void * abort_callback_data;
 
     atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
+    atomic_int steal_nodes[64];  // per-fused-node work-steal counters for iqk_mul_mat_4d decode path
 
     enum ggml_status ec;
 };
@@ -18783,7 +18784,7 @@ static int ggml_compute_forward_mul_mat(
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0_data, nb01,
                     src1->type, src1->data, nb11,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return node_n;
+                    (float *)dst->data, nb1/sizeof(float), ith, nth, NULL)) return node_n;
     }
 #endif
 
@@ -18833,6 +18834,9 @@ static int ggml_compute_forward_mul_mat(
             }
         }
 
+        if (ith == 0) {
+            for (int j = 0; j < 64; ++j) atomic_store(&params->shared->steal_nodes[j], 0);
+        }
         ggml_barrier(params->shared);
 
 #if IK_PRINT_TIMING
@@ -18851,8 +18855,9 @@ static int ggml_compute_forward_mul_mat(
                     nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0_data, nb01,
                     vec_dot_type, wdata, row_size,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) {
+                    (float *)dst->data, nb1/sizeof(float), ith, nth, params->shared->steal_nodes + 0)) {
             if (!cgraph) return node_n;
+            int fused_j = 1;
             while (node_n < cgraph->n_nodes - 1 &&
                    cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
                    cgraph->nodes[node_n+1]->src[1] == src1 &&
@@ -18868,8 +18873,9 @@ static int ggml_compute_forward_mul_mat(
                     dst_next->nb[2]/sizeof(float), dst_next->nb[3]/sizeof(float),
                     src0_next->type, src0_next_data, src0_next->nb[1],
                     vec_dot_type, wdata, row_size,
-                    (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth)) break;
-                ++node_n;
+                    (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth,
+                    fused_j < 64 ? params->shared->steal_nodes + fused_j : NULL)) break;
+                ++node_n; ++fused_j;
             }
             return node_n;
         }
