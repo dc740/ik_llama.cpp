@@ -682,7 +682,7 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth) {
+        float * C, long stride_C, int ith, int nth, iqk_atomic_int * steal_ctr) {
 
     auto r2 = ne12 / ne02;
     auto r3 = ne13 / ne03;
@@ -698,7 +698,11 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
                 while (ny > 0 && !mm.funcs[ny-1]) --ny;
                 if (ny >= r2) {
                     nchunk = nx32*ne02;
-                    for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
+                    // NUMA mirror: work-steal chunks across threads when caller supplies
+                    // a shared counter (static ith+nth stride leaves stragglers at barriers)
+                    for (long ichunk = steal_ctr ? iqk_steal_add(steal_ctr) : ith;
+                         ichunk < nchunk;
+                         ichunk = steal_ctr ? iqk_steal_add(steal_ctr) : ichunk + nth) {
                         int i02 = ichunk/nx32;
                         int ix = 32*(ichunk - i02*nx32);
                         DataInfo info{C + ix + r2*i02*nb2, (const char *)B + r2*i02*nb12, (size_t)nb2, (size_t)nb12, 0, 1, nullptr, 0};
@@ -707,7 +711,9 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
                     return true;
                 }
             }
-            for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
+            for (long ichunk = steal_ctr ? iqk_steal_add(steal_ctr) : ith;
+                 ichunk < nchunk;
+                 ichunk = steal_ctr ? iqk_steal_add(steal_ctr) : ichunk + nth) {
                 int i02 = ichunk/nx32;
                 int ix = ichunk - i02*nx32;
                 if (!iqk_mul_mat(32, r2, ne00,
@@ -2393,7 +2399,7 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
         long /*nb02*/, long /*nb03*/, long /*nb12*/, long /*nb13*/, long /*nb2*/, long /*nb3*/,
         int /*typeA*/, const void * /*A*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
-        float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/) {
+        float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/, atomic_int * /*steal_ctr*/) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }

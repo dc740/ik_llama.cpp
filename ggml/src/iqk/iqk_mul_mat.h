@@ -10,7 +10,20 @@
 #include <stddef.h>
 #include "iqk_config.h"
 #ifdef __cplusplus
+#include <atomic>
+using iqk_atomic_int = std::atomic_int;
 extern "C" {
+#else
+#include <stdatomic.h>
+typedef atomic_int iqk_atomic_int;
+#endif
+
+#ifdef __cplusplus
+}
+static inline int iqk_steal_add(iqk_atomic_int * c) { return c->fetch_add(1); }
+extern "C" {
+#else
+static inline int iqk_steal_add(iqk_atomic_int * c) { return atomic_fetch_add(c, 1); }
 #endif
 
 IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
@@ -23,7 +36,7 @@ IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth);
+        float * C, long stride_C, int ith, int nth, iqk_atomic_int * steal_ctr);
 
 IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeA, const void * A, long strideA,
