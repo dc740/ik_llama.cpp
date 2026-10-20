@@ -517,6 +517,7 @@ struct vk_device_struct {
     std::unordered_map<std::string, vk_pipeline_ref> pipelines;
 
     std::vector<std::tuple<void*, size_t, vk_buffer>> pinned_memory;
+    size_t pinned_bytes = 0;
 
     vk::Fence fence;
     vk_buffer sync_staging;
@@ -4371,6 +4372,20 @@ static vk_buffer ggml_vk_create_buffer_temp(ggml_backend_vk_context * ctx, size_
 }
 
 static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
+    // Pinned host allocations stay permanently resident in the GTT aperture,
+    // so their cumulative size is limited by it. Pinning huge host buffers
+    // (e.g. CPU weight buffers of a partially GPU-offloaded model) exhausts
+    // the aperture and amdgpu then fails command submission. Large allocations
+    // therefore fall back to unpinned host memory once a budget is exceeded;
+    // small buffers (KV boundaries, activation I/O) always stay pinned since
+    // they are the ones that benefit.
+    static const size_t pin_budget = [] {
+        const char * env = getenv("GGML_VK_PIN_BUDGET");
+        return env ? (size_t) strtoull(env, nullptr, 10) : ((size_t) 48 << 30);
+    }();
+    if (size > ((size_t) 256 << 20) && device->pinned_bytes + size > pin_budget) {
+        return nullptr;
+    }
     VK_LOG_MEMORY("ggml_vk_host_malloc(" << size << ")");
     vk_buffer buf = ggml_vk_create_buffer(device, size,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
@@ -4386,6 +4401,7 @@ static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
 
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
     device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
+    device->pinned_bytes += size;
 
     return buf->ptr;
 }
@@ -4415,6 +4431,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
 
     ggml_vk_destroy_buffer(buf);
 
+    device->pinned_bytes -= std::get<1>(device->pinned_memory[index]);
     device->pinned_memory.erase(device->pinned_memory.begin() + index);
 }
 
@@ -10038,7 +10055,9 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
         ptr = ggml_vk_host_malloc(vk_instance.devices[0], size);
     } catch (vk::SystemError& e) {
         GGML_LOG_WARN("ggml_vulkan: Failed to allocate pinned memory (%s)\n", e.what());
-        // fallback to cpu buffer
+    }
+    if (ptr == nullptr) {
+        // pinned allocation rejected or failed: fall back to a cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
 
