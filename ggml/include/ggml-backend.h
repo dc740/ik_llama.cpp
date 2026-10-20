@@ -43,6 +43,7 @@ extern "C" {
     GGML_API           void                           ggml_backend_buffer_clear         (ggml_backend_buffer_t buffer, uint8_t value);
     GGML_API           bool                           ggml_backend_buffer_is_host       (ggml_backend_buffer_t buffer);
     GGML_API GGML_CALL bool                           ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer);
+    GGML_API           size_t                         ggml_backend_multi_buffer_get_sub_buffers(ggml_backend_buffer_t buffer, ggml_backend_buffer_t * sub_buffers, size_t max_sub_buffers);
     GGML_API           void                           ggml_backend_buffer_set_usage     (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
     GGML_API           enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage     (ggml_backend_buffer_t buffer);
     GGML_API           ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);

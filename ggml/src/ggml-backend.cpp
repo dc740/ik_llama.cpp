@@ -1115,6 +1115,25 @@ GGML_CALL bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer)
     return buffer->iface.get_name == ggml_backend_multi_buffer_get_name;
 }
 
+// returns the number of sub-buffers wrapped by a multi-buffer and, when
+// sub_buffers is non-NULL, copies up to max_sub_buffers of them out. For a
+// plain (non-multi) buffer it reports the buffer itself as a single sub-buffer.
+GGML_CALL size_t ggml_backend_multi_buffer_get_sub_buffers(ggml_backend_buffer_t buffer, ggml_backend_buffer_t * sub_buffers, size_t max_sub_buffers) {
+    if (!ggml_backend_buffer_is_multi_buffer(buffer)) {
+        if (sub_buffers != NULL && max_sub_buffers > 0) {
+            sub_buffers[0] = buffer;
+        }
+        return 1;
+    }
+    ggml_backend_multi_buffer_context_t ctx = (ggml_backend_multi_buffer_context_t) buffer->context;
+    if (sub_buffers != NULL) {
+        for (size_t i = 0; i < ctx->n_buffers && i < max_sub_buffers; ++i) {
+            sub_buffers[i] = ctx->buffers[i];
+        }
+    }
+    return ctx->n_buffers;
+}
+
 GGML_CALL void ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
     GGML_ASSERT(ggml_backend_buffer_is_multi_buffer(buffer));
     ggml_backend_multi_buffer_context_t ctx = (ggml_backend_multi_buffer_context_t) buffer->context;

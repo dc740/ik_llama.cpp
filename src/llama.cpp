@@ -9225,6 +9225,32 @@ static size_t llama_get_available_ram_bytes() { return 0; }
 #endif
 
 // Duplicate the model's host weight buffers once per NUMA node and point each weight tensor at its
+// expand multi-buffers (created when a context exceeds a buft's max buffer
+// size, e.g. with GPU offloaded tensors) into their sub-buffers: a multi-buffer
+// has no base pointer of its own, so only the concrete host sub-buffers can be
+// mirrored.
+static std::vector<ggml_backend_buffer_t> llama_numa_mirror_host_buffers(const std::vector<ggml_backend_buffer_t> & bufs) {
+    std::vector<ggml_backend_buffer_t> out;
+    for (auto buf : bufs) {
+        if (!buf) {
+            continue;
+        }
+        if (ggml_backend_buffer_is_multi_buffer(buf)) {
+            const size_t n = ggml_backend_multi_buffer_get_sub_buffers(buf, nullptr, 0);
+            std::vector<ggml_backend_buffer_t> subs(n);
+            ggml_backend_multi_buffer_get_sub_buffers(buf, subs.data(), n);
+            for (auto sub : subs) {
+                if (sub && ggml_backend_buffer_is_host(sub)) {
+                    out.push_back(sub);
+                }
+            }
+        } else if (ggml_backend_buffer_is_host(buf)) {
+            out.push_back(buf);
+        }
+    }
+    return out;
+}
+
 // per-node copies (see ggml_numa_tensor_data). Must run AFTER all weight repacking (load-time and
 // the context-time up/gate merge) so the mirrored bytes are final. Idempotent per model.
 static void llama_mirror_model_weights(const llama_model & model) {
@@ -9239,11 +9265,10 @@ static void llama_mirror_model_weights(const llama_model & model) {
         return;
     }
 
+    const auto host_bufs = llama_numa_mirror_host_buffers(model.bufs);
     size_t total_host = 0;
-    for (auto buf : model.bufs) {
-        if (buf && ggml_backend_buffer_is_host(buf)) {
-            total_host += ggml_backend_buffer_get_size(buf);
-        }
+    for (auto buf : host_bufs) {
+        total_host += ggml_backend_buffer_get_size(buf);
     }
     if (total_host == 0) {
         return;
@@ -9260,10 +9285,7 @@ static void llama_mirror_model_weights(const llama_model & model) {
     }
 
     // allocate per-node copies of each host weight buffer
-    for (auto buf : model.bufs) {
-        if (!buf || !ggml_backend_buffer_is_host(buf)) {
-            continue;
-        }
+    for (auto buf : host_bufs) {
         llama_model::numa_mirror_buffer mb;
         mb.buf  = buf;
         mb.size = ggml_backend_buffer_get_size(buf);
@@ -9338,11 +9360,10 @@ static void llama_mirror_kv_cache(struct llama_kv_cache & cache) {
         return;
     }
 
+    const auto host_bufs = llama_numa_mirror_host_buffers(cache.bufs);
     size_t total = 0;
-    for (auto buf : cache.bufs) {
-        if (buf && ggml_backend_buffer_is_host(buf)) {
-            total += ggml_backend_buffer_get_size(buf);
-        }
+    for (auto buf : host_bufs) {
+        total += ggml_backend_buffer_get_size(buf);
     }
     if (total == 0) {
         return;
@@ -9357,10 +9378,7 @@ static void llama_mirror_kv_cache(struct llama_kv_cache & cache) {
         return;
     }
 
-    for (auto buf : cache.bufs) {
-        if (!buf || !ggml_backend_buffer_is_host(buf)) {
-            continue;
-        }
+    for (auto buf : host_bufs) {
         llama_kv_cache::numa_mirror_buffer mb;
         mb.buf  = buf;
         mb.size = ggml_backend_buffer_get_size(buf);
