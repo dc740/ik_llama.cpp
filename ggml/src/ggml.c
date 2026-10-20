@@ -13636,11 +13636,11 @@ static void ggml_compute_forward_dup_q(
         return;
     }
 
-    if (dst->type != GGML_TYPE_F32) {
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         printf("%s: %s -> %s is of type %s\n", __func__, dst->src[0]->name, dst->name, ggml_type_name(dst->type));
         GGML_ABORT("fatal error");
     }
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
     struct ggml_tensor * src0 = dst->src[0];
     GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
 
@@ -13649,6 +13649,9 @@ static void ggml_compute_forward_dup_q(
 
     int n_packed = ggml_packed_rows(src0->type);
     GGML_ASSERT(src0->ne[1] % n_packed == 0);
+
+    const bool to_f16 = dst->type == GGML_TYPE_F16;
+    float * aux = to_f16 ? (float *)malloc((size_t)src0->ne[0]*n_packed*sizeof(float)) : NULL;
 
     int64_t n_per_thread = n_packed*((nrows/n_packed + nth - 1)/nth);
     int64_t first_row = ith*n_per_thread;
@@ -13666,9 +13669,19 @@ static void ggml_compute_forward_dup_q(
         const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
               char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
 
-        to_float((const void *)q, (float *)f, src0->ne[0]*n_packed);
+        if (to_f16) {
+            const int64_t n = src0->ne[0]*n_packed;
+            to_float((const void *)q, aux, n);
+            ggml_fp16_t * d16 = (ggml_fp16_t *)f;
+            for (int64_t e = 0; e < n; ++e) {
+                d16[e] = GGML_FP32_TO_FP16(aux[e]);
+            }
+        } else {
+            to_float((const void *)q, (float *)f, src0->ne[0]*n_packed);
+        }
     }
 
+    free(aux);
 }
 
 static void ggml_compute_forward_dup(
